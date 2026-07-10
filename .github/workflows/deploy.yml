@@ -1,0 +1,63 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Validate words.js syntax
+        run: node --check words.js
+      - name: Validate inline script syntax
+        run: |
+          python3 -c "
+          import re, sys
+          html = open('index.html').read()
+          scripts = re.findall(r'<script>(.*?)</script>', html, re.S)
+          if len(scripts) != 1:
+              sys.exit(f'expected 1 inline script, found {len(scripts)}')
+          open('inline-check.js', 'w').write(scripts[0])
+          "
+          node --check inline-check.js
+      - name: Guard WORDS index stability
+        run: |
+          node -e "
+          const fs = require('fs');
+          const WORDS = new Function(fs.readFileSync('words.js', 'utf8') + '; return WORDS;')();
+          if (!Array.isArray(WORDS) || WORDS.length < 352)
+            throw new Error('WORDS가 352개 미만 — 기존 단어가 삭제되면 진행 기록 인덱스가 깨집니다 (현재: ' + WORDS.length + ')');
+          for (const [i, w] of WORDS.entries())
+            if (!w.f || !w.ko || !w.en) throw new Error('필수 필드(f/ko/en) 누락: index ' + i);
+          console.log('WORDS OK:', WORDS.length + '개');
+          "
+
+  deploy:
+    needs: check
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+      - id: deployment
+        uses: actions/deploy-pages@v4
